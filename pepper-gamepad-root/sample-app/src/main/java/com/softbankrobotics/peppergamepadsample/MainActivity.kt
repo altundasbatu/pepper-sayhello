@@ -21,19 +21,21 @@ import kotlinx.android.synthetic.main.activity_main.*
 import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.random.Random
+import com.aldebaran.qi.sdk.`object`.conversation.Phrase
+import com.aldebaran.qi.sdk.`object`.conversation.Say
+import com.aldebaran.qi.sdk.`object`.conversation.BodyLanguageOption
+import com.aldebaran.qi.sdk.`object`.conversation.PhraseSet
+import com.aldebaran.qi.sdk.`object`.conversation.Listen
+import com.aldebaran.qi.sdk.builder.PhraseSetBuilder
+import com.aldebaran.qi.sdk.builder.ListenBuilder
+import com.aldebaran.qi.sdk.`object`.conversation.ListenResult
+import com.aldebaran.qi.sdk.util.PhraseSetUtil
 
-class MainActivity : Activity(), RobotLifecycleCallbacks, InputDeviceListener {
+private const val TAG = "ListenRobotActivity"
 
-    companion object {
-        private const val TAG = "RemoteControlSample"
-    }
-
-    private lateinit var inputManager: InputManager
-
+//private const val
+class MainActivity : Activity(), RobotLifecycleCallbacks {
     private var qiContext: QiContext? = null
-    private lateinit var basicAwarenessHolder: Holder
-
-    private lateinit var remoteRobotController: RemoteRobotController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,185 +44,179 @@ class MainActivity : Activity(), RobotLifecycleCallbacks, InputDeviceListener {
 
         QiSDK.register(this, this)
 
-        inputManager = getSystemService(Context.INPUT_SERVICE) as InputManager
+
     }
 
     override fun onResume() {
         super.onResume()
-        inputManager.registerInputDeviceListener(this, null)
-        checkControllerConnection()
-
-        // Enables sticky immersive mode.
-        window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                // Set the content to appear under the system bars so that the
-                // content doesn't resize when the system bars hide and show.
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                // Hide the nav bar and status bar
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_FULLSCREEN)
-    }
-
-    override fun onInputDeviceRemoved(deviceId: Int) {
-        Log.d(TAG, "onInputDeviceRemoved")
-        checkControllerConnection()
-    }
-
-    override fun onInputDeviceAdded(deviceId: Int) {
-        Log.d(TAG, "onInputDeviceAdded")
-        checkControllerConnection()
-    }
-
-    override fun onInputDeviceChanged(deviceId: Int) {
-        Log.d(TAG, "onInputDeviceChanged")
-        checkControllerConnection()
-    }
-
-    private fun checkControllerConnection() {
-        val connectedControllers = getGameControllerIds()
-        if (connectedControllers.isEmpty()) {
-            runOnUiThread {
-                backgroundGifImageView.visibility = View.INVISIBLE
-                errorImageView.visibility = View.VISIBLE
-            }
-
-            val errorSentences = resources.getStringArray(R.array.error)
-            sayRandomSentence(errorSentences)
-        } else {
-            runOnUiThread {
-                backgroundGifImageView.visibility = View.VISIBLE
-                errorImageView.visibility = View.INVISIBLE
-            }
-
-            val welcomeSentences = resources.getStringArray(R.array.welcome)
-            sayRandomSentence(welcomeSentences)
-        }
-    }
-
-    private fun sayRandomSentence(sentencesArray: Array<String>) {
-        if (qiContext == null) {
-            return
-        }
-
-        val i = Random.nextInt(0, sentencesArray.size - 1)
-        SayBuilder.with(qiContext)
-            .withText(sentencesArray[i])
-            .buildAsync().andThenConsume {
-                it.async().run()
-            }
-    }
-
-    private fun getGameControllerIds(): List<Int> {
-        val gameControllerDeviceIds = mutableListOf<Int>()
-        val deviceIds = inputManager.inputDeviceIds
-        deviceIds.forEach { deviceId ->
-            InputDevice.getDevice(deviceId).apply {
-
-                // Verify that the device has gamepad buttons, control sticks, or both.
-                if (sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD
-                    || sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
-                ) {
-                    // This device is a game controller. Store its device ID.
-                    gameControllerDeviceIds
-                        .takeIf { !it.contains(deviceId) }
-                        ?.add(deviceId)
-                }
-            }
-        }
-        return gameControllerDeviceIds
     }
 
     override fun onRobotFocusGained(qiContext: QiContext) {
-        Log.i(TAG, "onRobotFocusGained")
+
         this.qiContext = qiContext
-
-        checkControllerConnection()
-
-        // Hold Basic Awareness to avoid robot getting distracted
-        basicAwarenessHolder = HolderBuilder.with(qiContext)
-            .withAutonomousAbilities(AutonomousAbilitiesType.BASIC_AWARENESS)
-            .build()
-        basicAwarenessHolder.async().hold().thenConsume {
-            when {
-                it.isSuccess -> Log.i(TAG, "BasicAwareness held with success")
-                it.hasError() -> Log.e(TAG, "holdBasicAwareness error: " + it.errorMessage)
-                it.isCancelled -> Log.e(TAG, "holdBasicAwareness cancelled")
-            }
-        }
-        remoteRobotController = RemoteRobotController(qiContext)
-        remoteRobotController.start()
-    }
-
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        Log.d(TAG, "onGenericMotionEvent $event")
-
-        // Add null protection for when the controller disconnects
-        val inputDevice = event.device ?: return super.onGenericMotionEvent(event)
-
-        // Get left joystick coordinates
-        val leftJoystickX = getCenteredAxis(event, inputDevice, MotionEvent.AXIS_X)
-        val leftJoystickY = getCenteredAxis(event, inputDevice, MotionEvent.AXIS_Y)
-
-        // Get right joystick coordinates
-        val rightJoystickX = getCenteredAxis(event, inputDevice, MotionEvent.AXIS_Z)
-        val rightJoystickY = getCenteredAxis(event, inputDevice, MotionEvent.AXIS_RZ)
-
-        if (::remoteRobotController.isInitialized) {
-            thread {
-                remoteRobotController.updateTarget(
-                    leftJoystickX,
-                    leftJoystickY,
-                    rightJoystickX,
-                    rightJoystickY
-                )
-            }
-        } else {
-            Log.d(TAG, "@@@@@@@@@ not initialized")
-        }
-
-        return true
-    }
-
-    private fun getCenteredAxis(
-        event: MotionEvent,
-        device: InputDevice,
-        axis: Int
-    ): Float {
-        val range: InputDevice.MotionRange? = device.getMotionRange(axis, event.source)
-
-        // A joystick at rest does not always report an absolute position of
-        // (0,0). Use the getFlat() method to determine the range of values
-        // bounding the joystick axis center.
-        range?.apply {
-            val value = event.getAxisValue(axis)
-
-            // Ignore axis values that are within the 'flat' region of the
-            // joystick axis center.
-            if (abs(value) > flat) {
-                return value
-            }
-        }
-        return 0f
+        runCode()
     }
 
     override fun onRobotFocusLost() {
-        Log.i(TAG, "onRobotFocusLost")
-        qiContext = null
-        remoteRobotController.stop()
+
+        this.qiContext = null
     }
 
     override fun onRobotFocusRefused(reason: String?) {
-        Log.e(TAG, "onRobotFocusRefused: $reason")
+
     }
 
     override fun onPause() {
         super.onPause()
-        inputManager.unregisterInputDeviceListener(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         QiSDK.unregister(this, this)
+    }
+
+    fun say(text: String) {
+        val phrase: Phrase = Phrase("$text")
+
+        val say : Say = SayBuilder.with(qiContext)
+            .withPhrase(phrase)
+            .build()
+
+        say.run()
+    }
+
+    fun acknowledge(humanText: String) {
+        say("You said $humanText")
+    }
+
+
+//    fun <T> asArray(vararg input: T): List<T> {
+//        val result = arrayOf<T>(input)
+////        for (item in input) // input is an Array
+////            result.add(item)
+//        return result
+//    }
+
+    fun listen(vararg phrases: PhraseSet): ListenResult {
+        // Build the action.
+
+        var phraseSet = arrayOf<PhraseSet>(*phrases)
+        val listen: Listen = ListenBuilder.with(this.qiContext)
+            .withPhraseSets(*phraseSet)
+            .build()
+
+        // Run the action synchronously.
+        val listenResult: ListenResult = listen.run()
+        val humanText = listenResult.heardPhrase.text
+        Log.i(TAG, "Heard phrase: $humanText")
+        val matchedPhraseSet: PhraseSet = listenResult.matchedPhraseSet;
+
+        if(true) {
+            acknowledge(humanText)
+        }
+        return listenResult
+    }
+
+
+    fun intro() {
+        say("Hello, I am Pepper, Human Cyborg Relations. How may I help you?")
+    }
+
+    fun runCode() {
+        intro()
+        // Questions
+        val questionFlags = listOf<String>(
+            "ten",
+            "ten",
+            "zero",
+            "zero",
+            "ten",
+            "zero",
+            "zero",
+            "zero"
+        )
+        val questions = listOf<String>(
+            "On a scale of one to ten, how would you rate your pain",
+            "During the past 24 hours, how would you rate any pain you feel during your general activity?",
+            "How would you rate your mood?",
+            "How would you rate your walking ability?",
+            "How busy is your normal work activities, this could be your regular day job or housework?",
+            "How would you rate your relationship with other people?",
+            "How would you rate your sleep quality?",
+            "How would you rate your general enjoyment of life?"
+        )
+        // Answers
+        val reset = PhraseSetBuilder.with(this.qiContext) // Create the builder using the QiContext.
+            .withTexts("reset", "restart") // Add the phrases Pepper will listen to.
+            .build() // Build the PhraseSet.
+        val end = PhraseSetBuilder.with(this.qiContext) // Create the builder using the QiContext.
+            .withTexts("end", "finish") // Add the phrases Pepper will listen to.
+            .build() // Build the PhraseSet.
+        val shutdown = PhraseSetBuilder.with(this.qiContext)
+            .withTexts("shutdown", "shut down", "shut off")
+            .build()
+        val binaryResponse = PhraseSetBuilder.with(this.qiContext)
+            .withTexts("yes", "no")
+            .build()
+        val scale = PhraseSetBuilder.with(this.qiContext)
+            .withTexts("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "zero")
+            .build()
+
+        while (true) {
+            var index = 0
+            while(index != questions.size) {
+                if (index == 0) {
+                    say("I would like to ask you a few questions, please say yes when you are ready to continue")
+                    var listenResult: ListenResult = listen(reset, end, binaryResponse)
+                    var matchedPhraseSet: PhraseSet = listenResult.matchedPhraseSet
+                    var humanText: String = listenResult.heardPhrase.text
+                    if(humanText == "no") {
+                        say("Alright, bye.")
+                        continue
+                    }
+                    else{
+                        say("Please rate the following questions from 0 to 10.")
+                    }
+                }
+                var question = questions[index]
+                say(question)
+                var listenResult: ListenResult = listen(reset, end, scale)
+                var matchedPhraseSet: PhraseSet = listenResult.matchedPhraseSet
+                var humanText: String = listenResult.heardPhrase.text
+                if(matchedPhraseSet == scale && questionFlags[index] == humanText){
+                    say("Do you need immediate medical assistance?")
+                    var listenResult: ListenResult = listen(reset, end, binaryResponse)
+                    var matchedPhraseSet: PhraseSet = listenResult.matchedPhraseSet
+                    var humanText: String = listenResult.heardPhrase.text
+                    if(humanText == "yes") {
+                        say("I shall contact medical professionals then.")
+                        // TODO: Contact Medical Professionals
+                        return
+                    }
+
+                }
+                if(matchedPhraseSet == end) {
+                    say("Alright bye.")
+                    break
+                } else if(matchedPhraseSet == reset) {
+                    index = 0 // reset the counter
+                    continue
+                } else {
+                    index += 1 // increment the question index
+                }
+            }
+
+            say("This concludes the questions, please say end to let me go.")
+            var listenResult: ListenResult = listen(reset, end, shutdown)
+            var matchedPhraseSet: PhraseSet = listenResult.matchedPhraseSet
+            var humanText: String = listenResult.heardPhrase.text
+            if(matchedPhraseSet == end) {
+                continue
+            } else if (matchedPhraseSet == shutdown) {
+                say("I am going to sleep now.")
+            }
+        }
+
+
     }
 }
